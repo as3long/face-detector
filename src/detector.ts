@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import * as fs from 'fs';
+import * as path from 'path';
 import { CascadeData, CascadeStage, DetectOptions, Detection, PrecompFeature, PrecompStage, RawImage } from './types.js';
 import cascadeData from './data/face-cascade.js';
 
@@ -7,8 +8,7 @@ async function loadFromBuffer(buf: Buffer, w?: number, h?: number): Promise<RawI
   let p = sharp(buf);
   if (w !== undefined && h !== undefined) p = p.resize(w, h, { fit: 'fill' });
   const { data, info } = await p.grayscale().raw().toBuffer({ resolveWithObject: true });
-  const arr = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  return { data: arr, width: info.width, height: info.height };
+  return { data: data, width: info.width, height: info.height };
 }
 
 function halfSubsample(src: RawImage, dx: number, dy: number): RawImage {
@@ -54,9 +54,12 @@ function groupDetections(seq: Detection[], minNeighbors: number): Detection[] {
   if (!(minNeighbors > 0)) return seq;
 
   const n = seq.length;
+  if (n === 0) return [];
+
   const node: { parent: number; element: Detection | null; rank: number }[] = [];
   for (let i = 0; i < n; i++) node.push({ parent: -1, element: seq[i], rank: 0 });
 
+  // Build overlap graph
   for (let i = 0; i < n; i++) {
     if (!node[i].element) continue;
     let root = i;
@@ -180,10 +183,10 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   const originalWidth = meta.width!;
   const originalHeight = meta.height!;
 
-  const effectiveMax = Math.min(options?.maxDimension ?? 200, 500);
-  const maxSide = Math.max(originalWidth, originalHeight);
   let inputImage: RawImage;
-  if (maxSide > effectiveMax) {
+  const effectiveMax = options?.maxDimension ?? 300;
+  const maxSide = Math.max(originalWidth, originalHeight);
+  if (effectiveMax !== undefined && maxSide > effectiveMax) {
     const ratio = effectiveMax / maxSide;
     const rw = Math.round(originalWidth * ratio);
     const rh = Math.round(originalHeight * ratio);
@@ -220,6 +223,7 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   const DX = [0, 1, 0, 1];
   const DY = [0, 0, 1, 1];
   const all: Detection[] = [];
+  let passCount = 0;
 
   let sf = 1;
   for (let i = 0; i < scaleUpto; i++) {
@@ -252,8 +256,8 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
         0,
       ];
       const pad = [
-        pyr0.width - qw * stride,
-        pyr1.width - qw * (stride >> 1),
+        pyr0.width * 4 - qw * stride,
+        pyr1.width * 2 - qw * (stride >> 1),
         pyr2[q].width - qw * (stride >> 2),
       ];
 
@@ -303,6 +307,7 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
           }
 
           if (passed) {
+            passCount++;
             const confidence = totalThreshold > 0 ? Math.min(1, totalSum / totalThreshold) : 0;
             all.push({
               x: (x * stride + DX[q] * 2) * sxf,
@@ -325,7 +330,9 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
     }
   }
 
-  return groupDetections(all, minNeighbors);
+  const grouped = groupDetections(all, minNeighbors);
+  if (process.env.DEBUG) console.log(path.basename(imagePath) + ':', 'raw=' + passCount, 'grouped=' + grouped.length);
+  return grouped;
 }
 
 export async function detectBestFace(

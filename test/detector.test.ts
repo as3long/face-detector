@@ -20,21 +20,21 @@ beforeAll(() => {
 });
 
 describe('detectFaces', () => {
-  it('returns array for no-face images', async () => {
+  it('returns empty array for no-face images', async () => {
     const results = await Promise.all(
       nofaceImages.map(img => detectFaces(img))
     );
     for (const faces of results) {
-      expect(Array.isArray(faces)).toBe(true);
+      expect(faces).toEqual([]);
     }
   }, 60000);
 
-  it('returns array for every face image', async () => {
+  it('returns exactly one face for every face image', async () => {
     const results = await Promise.all(
       faceImages.map(img => detectFaces(img))
     );
     for (const faces of results) {
-      expect(Array.isArray(faces)).toBe(true);
+      expect(faces.length).toBe(1);
     }
   }, 60000);
 
@@ -115,32 +115,33 @@ describe('detectFaces', () => {
   }, 60000);
 });
 
+
 describe('detectBestFace', () => {
-  it('returns null or valid shape for every face image', async () => {
+  it('returns valid shape for every face image', async () => {
     for (const img of faceImages) {
       const result = await detectBestFace(img);
-      if (result !== null) {
-        expect(result).toHaveProperty('x');
-        expect(result).toHaveProperty('y');
-        expect(result).toHaveProperty('width');
-        expect(result).toHaveProperty('height');
-        expect(typeof result.x).toBe('number');
-        expect(typeof result.y).toBe('number');
-        expect(typeof result.width).toBe('number');
-        expect(typeof result.height).toBe('number');
-      }
+      expect(result).not.toBeNull();
+      expect(result).toHaveProperty('x');
+      expect(result).toHaveProperty('y');
+      expect(result).toHaveProperty('width');
+      expect(result).toHaveProperty('height');
+      expect(typeof result!.x).toBe('number');
+      expect(typeof result!.y).toBe('number');
+      expect(typeof result!.width).toBe('number');
+      expect(typeof result!.height).toBe('number');
     }
   }, 60000);
 
   it('accepts options', async () => {
     const result = await detectBestFace(faceImages[0], { maxDimension: 300 });
-    expect(result === null || typeof result.x === 'number').toBe(true);
+    expect(result).not.toBeNull();
+    expect(typeof result!.x).toBe('number');
   }, 60000);
 
-  it('returns null or valid shape for no-face images', async () => {
+  it('returns null for no-face images', async () => {
     for (const img of nofaceImages) {
       const result = await detectBestFace(img);
-      expect(result === null || typeof result?.x === 'number').toBe(true);
+      expect(result).toBeNull();
     }
   }, 60000);
 });
