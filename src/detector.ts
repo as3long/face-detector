@@ -1,5 +1,6 @@
 import sharp from 'sharp';
-import { CascadeData, CascadeStage, Detection, PrecompFeature, PrecompStage, RawImage } from './types.js';
+import * as fs from 'fs';
+import { CascadeData, CascadeStage, DetectOptions, Detection, PrecompFeature, PrecompStage, RawImage } from './types.js';
 import cascadeData from './data/face-cascade.json';
 
 function grayscaleInPlace(data: Uint8Array): void {
@@ -11,8 +12,8 @@ function grayscaleInPlace(data: Uint8Array): void {
   }
 }
 
-async function loadRaw(filePath: string, w?: number, h?: number): Promise<RawImage> {
-  let p = sharp(filePath);
+async function loadFromBuffer(buf: Buffer, w?: number, h?: number): Promise<RawImage> {
+  let p = sharp(buf);
   if (w !== undefined && h !== undefined) p = p.resize(w, h, { fit: 'fill' });
   const { data, info } = await p.raw().toBuffer({ resolveWithObject: true });
   const arr = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -177,17 +178,35 @@ function groupDetections(seq: Detection[], minNeighbors: number): Detection[] {
   return result;
 }
 
-export async function detectFaces(imagePath: string): Promise<Detection[]> {
+export async function detectFaces(imagePath: string, options?: DetectOptions): Promise<Detection[]> {
   const cd = cascadeData as unknown as CascadeData;
   const cascadeWidth = cd.width;
   const cascadeHeight = cd.height;
   const interval = 3;
   const next = interval + 1;
-  const scale = Math.pow(2, 1 / (interval + 1));
+  const scale = options?.scaleFactor ?? Math.pow(2, 1 / (interval + 1));
+  const stride = options?.step ?? 4;
+  const minNeighbors = options?.minNeighbors ?? 3;
 
-  const original = await loadRaw(imagePath);
+  const fileBuffer = await fs.promises.readFile(imagePath);
+  const meta = await sharp(fileBuffer).metadata();
+  const originalWidth = meta.width!;
+  const originalHeight = meta.height!;
+
+  const effectiveMax = Math.min(options?.maxDimension ?? 200, 500);
+  const maxSide = Math.max(originalWidth, originalHeight);
+  let inputImage: RawImage;
+  if (maxSide > effectiveMax) {
+    const ratio = effectiveMax / maxSide;
+    const rw = Math.round(originalWidth * ratio);
+    const rh = Math.round(originalHeight * ratio);
+    inputImage = await loadFromBuffer(fileBuffer, rw, rh);
+  } else {
+    inputImage = await loadFromBuffer(fileBuffer);
+  }
+
   const scaleUpto = Math.floor(
-    Math.log(Math.min(original.width / cascadeWidth, original.height / cascadeHeight))
+    Math.log(Math.min(inputImage.width / cascadeWidth, inputImage.height / cascadeHeight))
     / Math.log(scale),
   );
   if (scaleUpto < 0) return [];
@@ -195,12 +214,12 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
   const pyrLen = (scaleUpto + next * 2) * 4;
   const pyr: (RawImage | undefined)[] = new Array(pyrLen);
 
-  pyr[0] = original;
+  pyr[0] = inputImage;
 
   for (let i = 1; i <= interval; i++) {
-    const w = Math.floor(original.width / Math.pow(scale, i));
-    const h = Math.floor(original.height / Math.pow(scale, i));
-    pyr[i * 4] = await loadRaw(imagePath, w, h);
+    const w = Math.floor(inputImage.width / Math.pow(scale, i));
+    const h = Math.floor(inputImage.height / Math.pow(scale, i));
+    pyr[i * 4] = await loadFromBuffer(fileBuffer, w, h);
   }
 
   for (let i = next; i < scaleUpto + next * 2; i++) {
@@ -226,12 +245,13 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
     const pyr2d = pyr[pyr2base + 3]!;
     const pyr2 = [pyr2a, pyr2b, pyr2c, pyr2d];
 
-    const step = [pyr0.width * 4, pyr1.width * 4, pyr2a.width * 4];
+    const stepArr = [pyr0.width * 4, pyr1.width * 4, pyr2a.width * 4];
 
-    const stages = precomputeFeatures(cd.stage_classifier, step);
+    const stages = precomputeFeatures(cd.stage_classifier, stepArr);
 
-    const qw = pyr2a.width - Math.floor(cascadeWidth / 4);
-    const qh = pyr2a.height - Math.floor(cascadeHeight / 4);
+    const level2Step = stride / 4;
+    const qw = Math.ceil((pyr2a.width - Math.floor(cascadeWidth / 4)) / level2Step);
+    const qh = Math.ceil((pyr2a.height - Math.floor(cascadeHeight / 4)) / level2Step);
     const sxf = Math.pow(scale, i);
     const syf = Math.pow(scale, i);
 
@@ -243,14 +263,16 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
         0,
       ];
       const pad = [
-        pyr0.width * 16 - qw * 16,
-        pyr1.width * 8 - qw * 8,
-        pyr2[q].width * 4 - qw * 4,
+        pyr0.width * 4 - qw * stride * 4,
+        pyr1.width * 4 - qw * stride * 2,
+        pyr2[q].width * 4 - qw * stride,
       ];
 
       for (let y = 0; y < qh; y++) {
         for (let x = 0; x < qw; x++) {
           let passed = true;
+          let totalSum = 0;
+          let totalThreshold = 0;
 
           for (const st of stages) {
             let sum = 0;
@@ -283,6 +305,8 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
                 sum += shortcut ? st.alpha[k * 2 + 1] : st.alpha[k * 2];
               }
             }
+            totalSum += sum;
+            totalThreshold += st.threshold;
             if (sum < st.threshold) {
               passed = false;
               break;
@@ -290,19 +314,20 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
           }
 
           if (passed) {
+            const confidence = totalThreshold > 0 ? Math.min(1, totalSum / totalThreshold) : 0;
             all.push({
-              x: (x * 4 + DX[q] * 2) * sxf,
-              y: (y * 4 + DY[q] * 2) * syf,
+              x: (x * stride + DX[q] * 2) * sxf,
+              y: (y * stride + DY[q] * 2) * syf,
               width: cascadeWidth * sxf,
               height: cascadeHeight * syf,
               neighbor: 1,
-              confidence: 0,
+              confidence,
             });
           }
 
-          u8o[0] += 16;
-          u8o[1] += 8;
-          u8o[2] += 4;
+          u8o[0] += stride * 4;
+          u8o[1] += stride * 2;
+          u8o[2] += stride;
         }
         u8o[0] += pad[0];
         u8o[1] += pad[1];
@@ -311,13 +336,14 @@ export async function detectFaces(imagePath: string): Promise<Detection[]> {
     }
   }
 
-  return groupDetections(all, 3);
+  return groupDetections(all, minNeighbors);
 }
 
 export async function detectBestFace(
   imagePath: string,
+  options?: DetectOptions,
 ): Promise<{ x: number; y: number; width: number; height: number } | null> {
-  const faces = await detectFaces(imagePath);
+  const faces = await detectFaces(imagePath, options);
   if (faces.length === 0) return null;
   faces.sort((a, b) => b.width * b.height - a.width * a.height);
   return {

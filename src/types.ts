@@ -30,6 +30,13 @@ export interface CascadeStage {
   feature: CascadeFeature[];
 }
 
+export interface DetectOptions {
+  maxDimension?: number;
+  minNeighbors?: number;
+  scaleFactor?: number;
+  step?: number;
+}
+
 export interface CascadeData {
   count: number;
   width: number;
