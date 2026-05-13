@@ -1,7 +1,7 @@
 import sharp from 'sharp';
 import * as fs from 'fs';
 import { CascadeData, CascadeStage, DetectOptions, Detection, PrecompFeature, PrecompStage, RawImage } from './types.js';
-import cascadeData from './data/face-cascade.json';
+import cascadeData from './data/face-cascade.js';
 
 async function loadFromBuffer(buf: Buffer, w?: number, h?: number): Promise<RawImage> {
   let p = sharp(buf);
@@ -166,7 +166,7 @@ function groupDetections(seq: Detection[], minNeighbors: number): Detection[] {
 }
 
 export async function detectFaces(imagePath: string, options?: DetectOptions): Promise<Detection[]> {
-  const cd = cascadeData as unknown as CascadeData;
+  const cd = cascadeData;
   const cascadeWidth = cd.width;
   const cascadeHeight = cd.height;
   const interval = 3;

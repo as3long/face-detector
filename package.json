@@ -1,6 +1,6 @@
 {
   "name": "@as3long/face-detector",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A face detection library based on Viola-Jones algorithm",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
