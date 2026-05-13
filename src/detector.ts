@@ -331,6 +331,16 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   }
 
   const grouped = groupDetections(all, minNeighbors);
+
+  const scaleX = originalWidth / inputImage.width;
+  const scaleY = originalHeight / inputImage.height;
+  for (const d of grouped) {
+    d.x *= scaleX;
+    d.y *= scaleY;
+    d.width *= scaleX;
+    d.height *= scaleY;
+  }
+
   if (process.env.DEBUG) console.log(path.basename(imagePath) + ':', 'raw=' + passCount, 'grouped=' + grouped.length);
   return grouped;
 }
