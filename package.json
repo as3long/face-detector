@@ -26,7 +26,7 @@
     "image",
     "computer-vision"
   ],
-  "author": "",
+  "author": "as3long",
   "license": "MIT",
   "dependencies": {
     "sharp": "^0.33.0"
