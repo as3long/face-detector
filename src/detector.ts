@@ -3,39 +3,26 @@ import * as fs from 'fs';
 import { CascadeData, CascadeStage, DetectOptions, Detection, PrecompFeature, PrecompStage, RawImage } from './types.js';
 import cascadeData from './data/face-cascade.json';
 
-function grayscaleInPlace(data: Uint8Array): void {
-  for (let i = 0; i < data.length; i += 4) {
-    const g = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
-    data[i] = g;
-    data[i + 1] = g;
-    data[i + 2] = g;
-  }
-}
-
 async function loadFromBuffer(buf: Buffer, w?: number, h?: number): Promise<RawImage> {
   let p = sharp(buf);
   if (w !== undefined && h !== undefined) p = p.resize(w, h, { fit: 'fill' });
-  const { data, info } = await p.raw().toBuffer({ resolveWithObject: true });
+  const { data, info } = await p.grayscale().raw().toBuffer({ resolveWithObject: true });
   const arr = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  grayscaleInPlace(arr);
   return { data: arr, width: info.width, height: info.height };
 }
 
 function halfSubsample(src: RawImage, dx: number, dy: number): RawImage {
   const dw = Math.floor(src.width / 2);
   const dh = Math.floor(src.height / 2);
-  const out = new Uint8Array(dw * dh * 4);
+  const out = new Uint8Array(dw * dh);
   let oi = 0;
   for (let y = 0; y < dh; y++) {
     const sy = Math.min(y * 2 + dy, src.height - 1);
     for (let x = 0; x < dw; x++) {
       const sx = Math.min(x * 2 + dx, src.width - 1);
-      const si = (sy * src.width + sx) * 4;
+      const si = sy * src.width + sx;
       out[oi] = src.data[si];
-      out[oi + 1] = src.data[si + 1];
-      out[oi + 2] = src.data[si + 2];
-      out[oi + 3] = src.data[si + 3];
-      oi += 4;
+      oi++;
     }
   }
   return { data: out, width: dw, height: dh };
@@ -54,8 +41,8 @@ function precomputeFeatures(stages: CascadeStage[], step: number[]): PrecompStag
       for (let j = 0; j < feat.size; j++) {
         f.pz[j] = feat.pz[j];
         f.nz[j] = feat.nz[j];
-        f.px[j] = feat.px[j] * 4 + feat.py[j] * step[feat.pz[j] >= 0 ? feat.pz[j] : 0];
-        f.nx[j] = feat.nz[j] >= 0 ? feat.nx[j] * 4 + feat.ny[j] * step[feat.nz[j]] : 0;
+        f.px[j] = feat.px[j] + feat.py[j] * step[feat.pz[j] >= 0 ? feat.pz[j] : 0];
+        f.nx[j] = feat.nz[j] >= 0 ? feat.nx[j] + feat.ny[j] * step[feat.nz[j]] : 0;
       }
       return f;
     });
@@ -75,11 +62,11 @@ function groupDetections(seq: Detection[], minNeighbors: number): Detection[] {
     let root = i;
     while (node[root].parent !== -1) root = node[root].parent;
 
-    for (let j = 0; j < n; j++) {
-      if (i === j || !node[j].element) continue;
+    for (let j = i + 1; j < n; j++) {
+      if (!node[j].element) continue;
       const r1 = node[i].element!;
       const r2 = node[j].element!;
-      const distance = Math.floor(r1.width * 0.25 + 0.5);
+      const distance = Math.floor(Math.max(r1.width, r2.width) * 0.25 + 0.5);
       const overlap =
         r2.x <= r1.x + distance &&
         r2.x >= r1.x - distance &&
@@ -234,6 +221,7 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   const DY = [0, 0, 1, 1];
   const all: Detection[] = [];
 
+  let sf = 1;
   for (let i = 0; i < scaleUpto; i++) {
     const bi = i * 4;
     const pyr0 = pyr[bi]!;
@@ -245,27 +233,28 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
     const pyr2d = pyr[pyr2base + 3]!;
     const pyr2 = [pyr2a, pyr2b, pyr2c, pyr2d];
 
-    const stepArr = [pyr0.width * 4, pyr1.width * 4, pyr2a.width * 4];
+    const stepArr = [pyr0.width, pyr1.width, pyr2a.width];
 
     const stages = precomputeFeatures(cd.stage_classifier, stepArr);
 
     const level2Step = stride / 4;
     const qw = Math.ceil((pyr2a.width - Math.floor(cascadeWidth / 4)) / level2Step);
     const qh = Math.ceil((pyr2a.height - Math.floor(cascadeHeight / 4)) / level2Step);
-    const sxf = Math.pow(scale, i);
-    const syf = Math.pow(scale, i);
+    if (i > 0) sf *= scale;
+    const sxf = sf;
+    const syf = sf;
 
     for (let q = 0; q < 4; q++) {
       const u8 = [pyr0.data, pyr1.data, pyr2[q].data];
       const u8o = [
-        DX[q] * 8 + DY[q] * pyr0.width * 8,
-        DX[q] * 4 + DY[q] * pyr1.width * 4,
+        DX[q] * 2 + DY[q] * pyr0.width * 2,
+        DX[q] + DY[q] * pyr1.width,
         0,
       ];
       const pad = [
-        pyr0.width * 4 - qw * stride * 4,
-        pyr1.width * 4 - qw * stride * 2,
-        pyr2[q].width * 4 - qw * stride,
+        pyr0.width - qw * stride,
+        pyr1.width - qw * (stride >> 1),
+        pyr2[q].width - qw * (stride >> 2),
       ];
 
       for (let y = 0; y < qh; y++) {
@@ -325,9 +314,9 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
             });
           }
 
-          u8o[0] += stride * 4;
-          u8o[1] += stride * 2;
-          u8o[2] += stride;
+          u8o[0] += stride;
+          u8o[1] += stride >> 1;
+          u8o[2] += stride >> 2;
         }
         u8o[0] += pad[0];
         u8o[1] += pad[1];

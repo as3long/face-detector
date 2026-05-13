@@ -32,10 +32,13 @@
     "sharp": "^0.33.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "eslint": "^10.3.0",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.9",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.59.3"
   }
 }

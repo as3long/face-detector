@@ -13,7 +13,7 @@ module.exports = {
         tsconfig: {
           esModuleInterop: true,
           resolveJsonModule: true,
-          target: 'ES2015',
+          target: 'ES2022',
           module: 'commonjs',
           moduleResolution: 'node',
           allowJs: true,

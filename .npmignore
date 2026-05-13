@@ -1,5 +1,7 @@
 src/
+test/
 tsconfig*.json
+eslint.config.js
 node_modules/
 package-lock.json
 .gitignore
