@@ -1,11 +1,11 @@
-# face-detector
+# @as3long/face-detector
 
 A face detection library based on the Viola-Jones algorithm. Detects faces in images using a cascade of Haar-like features.
 
 ## Installation
 
 ```bash
-npm install face-detector
+npm install @as3long/face-detector
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ npm install face-detector
 ### ESM
 
 ```typescript
-import { detectFaces, detectBestFace } from 'face-detector';
+import { detectFaces, detectBestFace } from '@as3long/face-detector';
 
 // Detect all faces in an image
 const faces = await detectFaces('path/to/image.jpg');
@@ -40,7 +40,7 @@ console.log(best);
 ### CommonJS
 
 ```javascript
-const { detectFaces, detectBestFace } = require('face-detector');
+const { detectFaces, detectBestFace } = require('@as3long/face-detector');
 
 async function main() {
   const faces = await detectFaces('path/to/image.jpg');
