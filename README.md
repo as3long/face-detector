@@ -25,10 +25,10 @@ console.log(faces);
 
 // With performance/accuracy options
 const faces2 = await detectFaces('path/to/image.jpg', {
-  maxDimension: 320,         // downscale large images (default 500)
+  maxDimension: 600,         // downscale large images (default 400)
   minNeighbors: 4,           // require more overlap (default 3)
-  scaleFactor: 1.1,          // finer pyramid scale (default 1.19)
-  step: 2,                   // smaller stride = more scans (default 4)
+  scaleFactor: 1.1,          // finer pyramid scale (default 1.15)
+  step: 2,                   // smallest stride = most scans (default 4)
 });
 
 // Get the best (largest) face
@@ -60,9 +60,9 @@ Detects all faces in the given image. Returns an array of detection results.
 **DetectOptions**:
 | Field          | Type     | Default                     | Description                                      |
 |----------------|----------|-----------------------------|--------------------------------------------------|
-| `maxDimension` | `number` | `200`                       | Max image dimension before downscaling (max 500) |
+| `maxDimension` | `number` | `400`                       | Max image dimension before downscaling           |
 | `minNeighbors` | `number` | `3`                         | Minimum overlapping detections to keep a face    |
-| `scaleFactor`  | `number` | `1.19` (2^(1/4))            | Scale multiplier between pyramid levels          |
+| `scaleFactor`  | `number` | `1.15`                       | Scale multiplier between pyramid levels          |
 | `step`         | `number` | `4`                         | Sliding window stride (smaller = more scans)     |
 
 **Detection**:

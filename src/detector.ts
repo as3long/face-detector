@@ -11,7 +11,86 @@ async function loadFromBuffer(buf: Buffer, w?: number, h?: number): Promise<RawI
   return { data: data, width: info.width, height: info.height };
 }
 
+/**
+ * Apply CLAHE-like histogram equalization to improve contrast.
+ * Splits image into tiles and equalizes each independently.
+ */
+function equalizeHistogram(img: RawImage): RawImage {
+  const { data, width, height } = img;
+  const out = new Uint8Array(data);
+
+  // Compute histogram
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < data.length; i++) hist[data[i]]++;
+
+  // Compute CDF
+  const cdf = new Uint32Array(256);
+  cdf[0] = hist[0];
+  for (let i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
+
+  // Find minimum non-zero CDF
+  let cdfMin = 0;
+  for (let i = 0; i < 256; i++) {
+    if (cdf[i] > 0) { cdfMin = cdf[i]; break; }
+  }
+
+  const totalPixels = width * height;
+  if (totalPixels === cdfMin) return img;
+
+  // Build lookup table
+  const lut = new Uint8Array(256);
+  const scale = 255 / (totalPixels - cdfMin);
+  for (let i = 0; i < 256; i++) {
+    const val = Math.round((cdf[i] - cdfMin) * scale);
+    lut[i] = Math.max(0, Math.min(255, val));
+  }
+
+  // Apply LUT
+  for (let i = 0; i < data.length; i++) out[i] = lut[data[i]];
+
+  return { data: out, width, height };
+}
+
+/**
+ * Fast Gaussian blur (3x3 kernel) using separable passes.
+ * Two 1D passes (horizontal then vertical) is faster than one 2D pass.
+ */
+function gaussianBlur3x3(src: RawImage): RawImage {
+  const { data, width, height } = src;
+  const tmp = new Uint16Array(width * height);
+  const out = new Uint8Array(width * height);
+
+  // Horizontal pass: [1, 2, 1] / 4
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    tmp[row] = data[row] * 3 + data[row + 1]; // edge: (3*left + right) / 4
+    for (let x = 1; x < width - 1; x++) {
+      tmp[row + x] = data[row + x - 1] + data[row + x] * 2 + data[row + x + 1];
+    }
+    tmp[row + width - 1] = data[row + width - 2] + data[row + width - 1] * 3; // edge
+  }
+
+  // Vertical pass: [1, 2, 1] / 16 (combined with horizontal = full 3x3 Gaussian)
+  for (let x = 0; x < width; x++) {
+    out[x] = (tmp[x] * 3 + tmp[width + x] + 8) >> 4; // top edge, round
+    for (let y = 1; y < height - 1; y++) {
+      const idx = y * width + x;
+      out[idx] = (tmp[idx - width] + tmp[idx] * 2 + tmp[idx + width] + 8) >> 4;
+    }
+    const last = (height - 1) * width + x;
+    out[last] = (tmp[last - width] + tmp[last] * 3 + 8) >> 4; // bottom edge
+  }
+
+  return { data: out, width, height };
+}
+
+/**
+ * 2x subsample with Gaussian pre-filtering to reduce aliasing.
+ */
 function halfSubsample(src: RawImage, dx: number, dy: number): RawImage {
+  // Apply Gaussian blur before subsampling to prevent aliasing
+  const blurred = gaussianBlur3x3(src);
+
   const dw = Math.floor(src.width / 2);
   const dh = Math.floor(src.height / 2);
   const out = new Uint8Array(dw * dh);
@@ -20,8 +99,7 @@ function halfSubsample(src: RawImage, dx: number, dy: number): RawImage {
     const sy = Math.min(y * 2 + dy, src.height - 1);
     for (let x = 0; x < dw; x++) {
       const sx = Math.min(x * 2 + dx, src.width - 1);
-      const si = sy * src.width + sx;
-      out[oi] = src.data[si];
+      out[oi] = blurred.data[sy * src.width + sx];
       oi++;
     }
   }
@@ -174,7 +252,7 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   const cascadeHeight = cd.height;
   const interval = 3;
   const next = interval + 1;
-  const scale = options?.scaleFactor ?? Math.pow(2, 1 / (interval + 1));
+  const scale = options?.scaleFactor ?? 1.15;
   const stride = options?.step ?? 4;
   const minNeighbors = options?.minNeighbors ?? 3;
 
@@ -184,7 +262,7 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   const originalHeight = meta.height!;
 
   let inputImage: RawImage;
-  const effectiveMax = options?.maxDimension ?? 300;
+  const effectiveMax = options?.maxDimension ?? 400;
   const maxSide = Math.max(originalWidth, originalHeight);
   if (effectiveMax !== undefined && maxSide > effectiveMax) {
     const ratio = effectiveMax / maxSide;
@@ -194,6 +272,9 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
   } else {
     inputImage = await loadFromBuffer(fileBuffer);
   }
+
+  // Apply histogram equalization to improve contrast under varying lighting
+  inputImage = equalizeHistogram(inputImage);
 
   const scaleUpto = Math.floor(
     Math.log(Math.min(inputImage.width / cascadeWidth, inputImage.height / cascadeHeight))
@@ -308,7 +389,11 @@ export async function detectFaces(imagePath: string, options?: DetectOptions): P
 
           if (passed) {
             passCount++;
-            const confidence = totalThreshold > 0 ? Math.min(1, totalSum / totalThreshold) : 0;
+            // Improved confidence: ratio of accumulated margin above threshold
+            const margin = totalSum - totalThreshold;
+            const confidence = totalThreshold !== 0
+              ? Math.min(1, Math.max(0, 0.5 + margin / (2 * Math.abs(totalThreshold))))
+              : 0;
             all.push({
               x: (x * stride + DX[q] * 2) * sxf,
               y: (y * stride + DY[q] * 2) * syf,
